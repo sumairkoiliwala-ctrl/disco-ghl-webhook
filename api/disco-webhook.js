@@ -1,38 +1,58 @@
-const axios = require('axios');
-
-module.exports = async (req, res) => {
+module.exports = async function handler(req, res) {
   try {
-    const event = req.body;
+    const payload = req.body || {};
 
-    const userId = event?.data?.user?.id || null;
+    const user = payload?.data?.user || {};
+    const fields = payload?.data?.user_profile_fields || [];
 
-    console.log("Incoming Disco event:");
-    console.log(JSON.stringify(event, null, 2));
+    const getFieldValue = (title) => {
+      const field = fields.find(
+        (f) => (f.title || "").toLowerCase() === title.toLowerCase()
+      );
 
-    console.log("Extracted User ID:", userId);
+      if (!field) return null;
 
-    if (!userId) {
-      return res.status(200).json({ success: true, message: "No user ID found" });
-    }
+      if (Array.isArray(field.selected_options) && field.options?.length) {
+        const labels = field.options
+          .filter((opt) => field.selected_options.includes(opt.id))
+          .map((opt) => opt.label);
 
-    const discoResponse = await axios.get(
-      `https://api.disco.co/v1/users/${userId}`,
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.DISCO_API_KEY}`,
-          "Content-Type": "application/json"
-        }
+        if (labels.length) return labels;
       }
-    );
 
-    console.log("Full Disco User Response:");
-    console.log(JSON.stringify(discoResponse.data, null, 2));
+      return field.value ?? null;
+    };
 
-    return res.status(200).json({ success: true });
+    const responseData = {
+      event: payload.event || null,
+      event_id: payload.event_id || null,
 
+      user_id: user.id || null,
+      email: user.email || null,
+      first_name: user.first_name || null,
+      last_name: user.last_name || null,
+      role: user.role || null,
+      status: user.status || null,
+      joined_at: user.joined_at || null,
+
+      primary_industry: getFieldValue("Primary Industry"),
+      secondary_industry: getFieldValue("Secondary Industry"),
+      position: getFieldValue("Position"),
+      location: getFieldValue("Location"),
+      community_support: getFieldValue("Community Support"),
+      short_bio: getFieldValue("Short Bio"),
+      local_timezone: getFieldValue("Local Timezone")
+    };
+
+    console.log("Flattened JSON for GHL:");
+    console.log(JSON.stringify(responseData, null, 2));
+
+    return res.status(200).json(responseData);
   } catch (error) {
-    console.error("Error:");
-    console.error(error.response?.data || error.message);
-    return res.status(500).json({ error: "Webhook Error" });
+    console.error("Webhook error:", error);
+    return res.status(500).json({
+      error: true,
+      message: error.message
+    });
   }
 };
