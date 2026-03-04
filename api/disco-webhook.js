@@ -14,7 +14,61 @@ module.exports = async function handler(req, res) {
     console.log("Clean Disco payload:");
     console.log(JSON.stringify(cleanPayload, null, 2));
 
-    return res.status(200).json(cleanPayload);
+    let ghlResult = {
+      sent: false,
+      status: null,
+      response: null
+    };
+
+    if (process.env.GHL_WEBHOOK_URL) {
+      try {
+        const ghlResponse = await fetch(process.env.GHL_WEBHOOK_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(cleanPayload)
+        });
+
+        const responseText = await ghlResponse.text();
+
+        ghlResult = {
+          sent: true,
+          status: ghlResponse.status,
+          response: responseText
+        };
+
+        console.log("GHL webhook response:");
+        console.log(
+          JSON.stringify(
+            {
+              status: ghlResponse.status,
+              body: responseText
+            },
+            null,
+            2
+          )
+        );
+      } catch (ghlError) {
+        console.error("GHL webhook send error:", ghlError.message);
+
+        ghlResult = {
+          sent: false,
+          status: null,
+          response: ghlError.message
+        };
+      }
+    } else {
+      console.log("GHL_WEBHOOK_URL is not set, skipping GHL forward.");
+    }
+
+    return res.status(200).json({
+      success: true,
+      forwarded_to_ghl: ghlResult.sent,
+      ghl_status: ghlResult.status,
+      ghl_response: ghlResult.response,
+      data: cleanPayload
+    });
   } catch (error) {
     console.error("Webhook error:", error);
     return res.status(500).json({
@@ -63,7 +117,6 @@ function getCleanFieldValue(field) {
     ? field.selected_options
     : [];
 
-  // Single select: return plain string
   if (type === "single_select") {
     if (typeof value === "string" && value.trim()) {
       return value.trim();
@@ -80,7 +133,6 @@ function getCleanFieldValue(field) {
     return "";
   }
 
-  // Multiple select: return comma-separated string for GHL text fields
   if (type === "multiple_select") {
     if (typeof value === "string" && value.trim()) {
       return value.trim();
@@ -97,7 +149,6 @@ function getCleanFieldValue(field) {
     return "";
   }
 
-  // Written answers and everything else
   if (value === null || value === undefined) {
     return "";
   }
