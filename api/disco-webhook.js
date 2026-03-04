@@ -1,58 +1,118 @@
 module.exports = async function handler(req, res) {
   try {
-    const payload = req.body || {};
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Method not allowed" });
+    }
 
-    const user = payload?.data?.user || {};
-    const fields = payload?.data?.user_profile_fields || [];
+    const body =
+      typeof req.body === "string"
+        ? JSON.parse(req.body)
+        : req.body || {};
 
-    const getFieldValue = (title) => {
-      const field = fields.find(
-        (f) => (f.title || "").toLowerCase() === title.toLowerCase()
-      );
+    const cleanPayload = buildCleanPayload(body);
 
-      if (!field) return null;
+    console.log("Clean Disco payload:");
+    console.log(JSON.stringify(cleanPayload, null, 2));
 
-      if (Array.isArray(field.selected_options) && field.options?.length) {
-        const labels = field.options
-          .filter((opt) => field.selected_options.includes(opt.id))
-          .map((opt) => opt.label);
-
-        if (labels.length) return labels;
-      }
-
-      return field.value ?? null;
-    };
-
-    const responseData = {
-      event: payload.event || null,
-      event_id: payload.event_id || null,
-
-      user_id: user.id || null,
-      email: user.email || null,
-      first_name: user.first_name || null,
-      last_name: user.last_name || null,
-      role: user.role || null,
-      status: user.status || null,
-      joined_at: user.joined_at || null,
-
-      primary_industry: getFieldValue("Primary Industry"),
-      secondary_industry: getFieldValue("Secondary Industry"),
-      position: getFieldValue("Position"),
-      location: getFieldValue("Location"),
-      community_support: getFieldValue("Community Support"),
-      short_bio: getFieldValue("Short Bio"),
-      local_timezone: getFieldValue("Local Timezone")
-    };
-
-    console.log("Flattened JSON for GHL:");
-    console.log(JSON.stringify(responseData, null, 2));
-
-    return res.status(200).json(responseData);
+    return res.status(200).json(cleanPayload);
   } catch (error) {
     console.error("Webhook error:", error);
     return res.status(500).json({
-      error: true,
+      error: "Webhook processing failed",
       message: error.message
     });
   }
 };
+
+function buildCleanPayload(body) {
+  const user = body?.data?.user || {};
+  const profileFields = body?.data?.user_profile_fields || [];
+
+  const normalizedFields = normalizeProfileFields(profileFields);
+
+  return {
+    event: body?.event || "",
+    event_id: body?.event_id || "",
+    user_id: user?.id || "",
+    email: user?.email || "",
+    first_name: user?.first_name || "",
+    last_name: user?.last_name || "",
+    role: user?.role || "",
+    status: user?.status || "",
+    joined_at: user?.joined_at || "",
+    ...normalizedFields
+  };
+}
+
+function normalizeProfileFields(fields) {
+  const output = {};
+
+  for (const field of fields) {
+    const key = toSnakeCase(field?.title || "unknown_field");
+    output[key] = getCleanFieldValue(field);
+  }
+
+  return output;
+}
+
+function getCleanFieldValue(field) {
+  const type = field?.type;
+  const value = field?.value;
+  const options = Array.isArray(field?.options) ? field.options : [];
+  const selectedOptions = Array.isArray(field?.selected_options)
+    ? field.selected_options
+    : [];
+
+  // Single select: return plain string
+  if (type === "single_select") {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+
+    if (selectedOptions.length > 0) {
+      const labels = selectedOptions
+        .map((id) => options.find((opt) => opt.id === id)?.label)
+        .filter(Boolean);
+
+      return labels[0] || "";
+    }
+
+    return "";
+  }
+
+  // Multiple select: return comma-separated string for GHL text fields
+  if (type === "multiple_select") {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+
+    if (selectedOptions.length > 0) {
+      const labels = selectedOptions
+        .map((id) => options.find((opt) => opt.id === id)?.label)
+        .filter(Boolean);
+
+      return labels.join(", ");
+    }
+
+    return "";
+  }
+
+  // Written answers and everything else
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  if (Array.isArray(value)) {
+    return value.join(", ");
+  }
+
+  return String(value).trim();
+}
+
+function toSnakeCase(text) {
+  return String(text)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
