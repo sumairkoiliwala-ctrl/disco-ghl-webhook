@@ -5,76 +5,25 @@ module.exports = async function handler(req, res) {
     }
 
     const body =
-      typeof req.body === "string"
-        ? JSON.parse(req.body)
-        : req.body || {};
+      typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
 
     const cleanPayload = buildCleanPayload(body);
 
-    console.log("Clean Disco payload:");
-    console.log(JSON.stringify(cleanPayload, null, 2));
-
-    let ghlResult = {
-      sent: false,
-      status: null,
-      response: null
-    };
-
-    if (process.env.GHL_WEBHOOK_URL) {
-      try {
-        const ghlResponse = await fetch(process.env.GHL_WEBHOOK_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify(cleanPayload)
-        });
-
-        const responseText = await ghlResponse.text();
-
-        ghlResult = {
-          sent: true,
-          status: ghlResponse.status,
-          response: responseText
-        };
-
-        console.log("GHL webhook response:");
-        console.log(
-          JSON.stringify(
-            {
-              status: ghlResponse.status,
-              body: responseText
-            },
-            null,
-            2
-          )
-        );
-      } catch (ghlError) {
-        console.error("GHL webhook send error:", ghlError.message);
-
-        ghlResult = {
-          sent: false,
-          status: null,
-          response: ghlError.message
-        };
-      }
-    } else {
-      console.log("GHL_WEBHOOK_URL is not set, skipping GHL forward.");
+    // send to GHL
+    if (!process.env.GHL_WEBHOOK_URL) {
+      return res.status(500).json({ error: "Missing GHL_WEBHOOK_URL" });
     }
 
-    return res.status(200).json({
-      success: true,
-      forwarded_to_ghl: ghlResult.sent,
-      ghl_status: ghlResult.status,
-      ghl_response: ghlResult.response,
-      data: cleanPayload
+    await fetch(process.env.GHL_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cleanPayload)
     });
+
+    return res.status(200).json({ success: true, data: cleanPayload });
   } catch (error) {
     console.error("Webhook error:", error);
-    return res.status(500).json({
-      error: "Webhook processing failed",
-      message: error.message
-    });
+    return res.status(500).json({ error: true, message: error.message });
   }
 };
 
@@ -84,9 +33,31 @@ function buildCleanPayload(body) {
 
   const normalizedFields = normalizeProfileFields(profileFields);
 
+  // These are the fields you always want present (even if empty)
+  const defaults = {
+    short_bio: "",
+    local_timezone: "",
+    community_support: "",
+    primary_industry: "",
+    secondary_industry: "",
+    position: "",
+    location: ""
+  };
+
+  // Force a single workflow route if you want
+  // event_group is used only for GHL filtering
+  const event = body?.event || "";
+  const event_group =
+    event === "community.user_onboarding_completed" ||
+    event === "community.user_updated_profile"
+      ? "profile"
+      : "other";
+
   return {
-    event: body?.event || "",
+    event,
+    event_group,
     event_id: body?.event_id || "",
+
     user_id: user?.id || "",
     email: user?.email || "",
     first_name: user?.first_name || "",
@@ -94,6 +65,8 @@ function buildCleanPayload(body) {
     role: user?.role || "",
     status: user?.status || "",
     joined_at: user?.joined_at || "",
+
+    ...defaults,
     ...normalizedFields
   };
 }
@@ -117,46 +90,30 @@ function getCleanFieldValue(field) {
     ? field.selected_options
     : [];
 
+  // single select -> string
   if (type === "single_select") {
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
+    if (typeof value === "string" && value.trim()) return value.trim();
 
     if (selectedOptions.length > 0) {
-      const labels = selectedOptions
-        .map((id) => options.find((opt) => opt.id === id)?.label)
-        .filter(Boolean);
-
-      return labels[0] || "";
+      const label = options.find((o) => o.id === selectedOptions[0])?.label;
+      return label || "";
     }
-
     return "";
   }
 
+  // multi select -> comma-separated string
   if (type === "multiple_select") {
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
+    if (typeof value === "string" && value.trim()) return value.trim();
 
-    if (selectedOptions.length > 0) {
-      const labels = selectedOptions
-        .map((id) => options.find((opt) => opt.id === id)?.label)
-        .filter(Boolean);
+    const labels = selectedOptions
+      .map((id) => options.find((o) => o.id === id)?.label)
+      .filter(Boolean);
 
-      return labels.join(", ");
-    }
-
-    return "";
+    return labels.join(", ");
   }
 
-  if (value === null || value === undefined) {
-    return "";
-  }
-
-  if (Array.isArray(value)) {
-    return value.join(", ");
-  }
-
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) return value.join(", ");
   return String(value).trim();
 }
 
